@@ -1,0 +1,569 @@
+"""
+API routing module
+"""
+from datetime import datetime
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from market.data_cache import kline_cache
+from market.websocket_client import ws_client
+from agent.workflow import create_trading_workflow
+from agent.tools.analysis_tools import create_tech_analysis_tool
+from agent.models import analysis_service
+from agent.scheduler import get_scheduler
+from database.database import init_database
+from config.settings import config
+from utils.logger import logger
+from trading.binance_futures import get_trader
+from trading.position_service import get_position_service
+
+router = APIRouter()
+
+
+# Response models
+class HealthResponse(BaseModel):
+    status: str
+    timestamp: datetime
+    uptime_seconds: int
+    websocket_connected: bool
+    total_symbols: int
+    active_timeframes: int
+
+
+class SymbolsResponse(BaseModel):
+    symbols: List[str]
+    timeframes: List[str]
+
+
+class KlineResponse(BaseModel):
+    symbol: str
+    timeframe: str
+    data: List[Dict[str, Any]]
+
+
+class CacheInfoResponse(BaseModel):
+    total_symbols: int
+    max_klines_per_timeframe: int
+    symbol_details: Dict[str, Dict[str, Any]]
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health_check():
+    """System health check"""
+    status = ws_client.get_status()
+    
+    return HealthResponse(
+        status="healthy" if status.connected else "unhealthy",
+        timestamp=datetime.now(),
+        uptime_seconds=0,  # TODO: Implement uptime calculation
+        websocket_connected=status.connected,
+        total_symbols=len(config.agent.symbols),
+        active_timeframes=len(config.agent.timeframes)
+    )
+
+
+@router.get("/symbols", response_model=SymbolsResponse)
+async def get_symbols():
+    """Get configured symbols and timeframes"""
+    return SymbolsResponse(
+        symbols=config.agent.symbols,
+        timeframes=config.agent.timeframes
+    )
+
+
+@router.get("/klines/{symbol}/{timeframe}", response_model=KlineResponse)
+async def get_klines(symbol: str, timeframe: str, limit: Optional[int] = None):
+    """Get kline data"""
+    if symbol not in config.agent.symbols:
+        raise HTTPException(status_code=404, detail=f"Symbol {symbol} not configured")
+    
+    if timeframe not in config.agent.timeframes:
+        raise HTTPException(status_code=404, detail=f"Timeframe {timeframe} not configured")
+    
+    klines = await kline_cache.get_klines(symbol, timeframe, limit)
+    
+    if not klines:
+        return KlineResponse(
+            symbol=symbol,
+            timeframe=timeframe,
+            data=[]
+        )
+    
+    # Convert to dictionary format
+    data = []
+    for kline in klines:
+        data.append({
+            "open_time": kline.open_time,
+            "close_time": kline.close_time,
+            "open_price": float(kline.open_price),
+            "high_price": float(kline.high_price),
+            "low_price": float(kline.low_price),
+            "close_price": float(kline.close_price),
+            "volume": float(kline.volume),
+            "quote_volume": float(kline.quote_volume),
+            "trades_count": kline.trades_count,
+            "is_final": kline.is_final,
+            "timestamp": kline.timestamp.isoformat()
+        })
+    
+    return KlineResponse(
+        symbol=symbol,
+        timeframe=timeframe,
+        data=data
+    )
+
+
+@router.get("/snapshot/{symbol}")
+async def get_symbol_snapshot(symbol: str):
+    """Get symbol snapshot for all timeframes"""
+    if symbol not in config.agent.symbols:
+        raise HTTPException(status_code=404, detail=f"Symbol {symbol} not configured")
+    
+    snapshot = {}
+    
+    for timeframe in config.agent.timeframes:
+        latest = await kline_cache.get_latest_kline(symbol, timeframe)
+        if latest:
+            snapshot[timeframe] = {
+                "open_time": latest.open_time,
+                "close_price": float(latest.close_price),
+                "volume": float(latest.volume),
+                "is_final": latest.is_final,
+                "timestamp": latest.timestamp.isoformat()
+            }
+        else:
+            snapshot[timeframe] = None
+    
+    return {
+        "symbol": symbol,
+        "snapshot": snapshot,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@router.get("/cache/info", response_model=CacheInfoResponse)
+async def get_cache_info():
+    """Get cache information"""
+    info = await kline_cache.get_cache_info()
+    return CacheInfoResponse(**info)
+
+
+@router.get("/connection/status")
+async def get_connection_status():
+    """Get connection status"""
+    status = ws_client.get_status()
+    return {
+        "exchange": status.exchange,
+        "connected": status.connected,
+        "last_message": status.last_message.isoformat() if status.last_message else None,
+        "reconnect_count": status.reconnect_count,
+        "error_message": status.error_message
+    }
+
+
+@router.get("/config")
+async def get_system_config():
+    """Get system configuration"""
+    return {
+        "agent": {
+            "model_name": config.agent.model_name,
+            "decision_interval": config.agent.decision_interval,
+            "symbols": config.agent.symbols,
+            "timeframes": config.agent.timeframes
+        },
+        "exchange": {
+            "name": config.exchange.name,
+            "testnet": config.exchange.testnet,
+            "websocket_url": config.exchange.get_websocket_url(),
+            "rest_api_url": config.exchange.get_rest_api_url()
+        },
+        "system": {
+            "host": config.system.host,
+            "port": config.system.port,
+            "log_level": config.system.log_level
+        },
+        "risk": {
+            "max_position_size_percent": config.default_risk.max_position_size_percent,
+            "max_daily_loss_percent": config.default_risk.max_daily_loss_percent,
+            "stop_loss_percent": config.default_risk.stop_loss_percent
+        }
+    }
+
+
+@router.get("/config/validate")
+async def validate_config():
+    """Validate system configuration"""
+    missing_vars = config.validate_required_env_vars()
+    
+    return {
+        "valid": len(missing_vars) == 0,
+        "missing_env_vars": missing_vars,
+        "testnet_mode": config.is_testnet_mode(),
+        "agent_configured": bool(config.agent.api_key and not config.agent.api_key.startswith('${')),
+        "exchange_configured": bool(
+            config.exchange.api_key and 
+            config.exchange.api_secret and 
+            not config.exchange.api_key.startswith('${') and
+            not config.exchange.api_secret.startswith('${')
+        )
+    }
+
+
+# Agent analysis response models
+class SymbolDecisionResponse(BaseModel):
+    symbol: str
+    action: str
+    reasoning: str
+    execution_status: str
+    execution_result: Optional[Dict[str, Any]] = None
+
+
+class AgentAnalysisResponse(BaseModel):
+    symbol_decisions: Dict[str, SymbolDecisionResponse]
+    overall_summary: Optional[str] = None
+    error: Optional[str] = None
+    duration_ms: float
+
+
+# Agent endpoints
+@router.post("/agent/analyze", response_model=AgentAnalysisResponse)
+async def run_agent_analysis():
+    """Run AI agent analysis and trading workflow"""
+    try:
+        logger.info("开始运行 Agent 分析...")
+        
+        # 确保数据库已初始化
+        await init_database()
+        
+        # 创建技术分析工具
+        tech_tool = create_tech_analysis_tool()
+        tools = [tech_tool]
+        
+        # 创建工作流程
+        workflow = create_trading_workflow(tools)
+        
+        # 初始状态
+        from agent.state import AgentState
+        initial_state: AgentState = {
+            "symbol_decisions": {},
+            "overall_summary": None,
+            "error": None
+        }
+        
+        # 运行工作流程
+        start_time = datetime.now()
+        result = await workflow.ainvoke(initial_state)
+        duration_ms = (datetime.now() - start_time).total_seconds() * 1000
+        
+        # 构建响应
+        symbol_decisions_response = {}
+        for symbol, decision in result["symbol_decisions"].items():
+            symbol_decisions_response[symbol] = SymbolDecisionResponse(
+                symbol=symbol,
+                action=decision["action"],
+                reasoning=decision["reasoning"],
+                execution_status=decision["execution_status"],
+                execution_result=decision["execution_result"]
+            )
+        
+        response = AgentAnalysisResponse(
+            symbol_decisions=symbol_decisions_response,
+            overall_summary=result.get("overall_summary"),
+            error=result.get("error"),
+            duration_ms=duration_ms
+        )
+        
+        logger.info(f"Agent 分析完成: {len(result['symbol_decisions'])} 个标的决策 (耗时: {duration_ms:.2f}ms)")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Agent 分析失败: {e}")
+        return AgentAnalysisResponse(
+            symbol_decisions={},
+            overall_summary=f"Agent 分析失败: {str(e)}",
+            error=str(e),
+            duration_ms=0.0
+        )
+
+
+class DecisionResponse(BaseModel):
+    id: int
+    timestamp: datetime
+    analysis_id: str
+    overall_summary: Optional[str] = None
+    symbol_decisions: Dict[str, Any]
+    model_name: str
+    duration_ms: Optional[float] = None
+
+
+@router.get("/decisions", response_model=List[DecisionResponse])
+async def get_decisions(limit: int = 100, offset: int = 0):
+    """Get recent trading analyses"""
+    try:
+        analyses = await analysis_service.get_recent_analyses(limit=limit, offset=offset)
+        
+        response = []
+        for analysis in analyses:
+            response.append(DecisionResponse(
+                id=analysis.id,
+                timestamp=analysis.timestamp,
+                analysis_id=analysis.analysis_id,
+                overall_summary=analysis.overall_summary,
+                symbol_decisions=analysis.symbol_decisions,
+                model_name=analysis.model_name,
+                duration_ms=analysis.duration_ms
+            ))
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"获取分析失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取分析失败: {str(e)}")
+
+
+class DecisionStatsResponse(BaseModel):
+    period_days: int
+    total_analyses: int
+    avg_duration_ms: float
+
+
+@router.get("/decisions/stats", response_model=DecisionStatsResponse)
+async def get_decision_stats(days: int = 7):
+    """Get analysis statistics"""
+    try:
+        stats = await analysis_service.get_analysis_stats(days=days)
+        
+        return DecisionStatsResponse(**stats)
+        
+    except Exception as e:
+        logger.error(f"获取分析统计失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取分析统计失败: {str(e)}")
+
+
+# Agent control response models
+class AgentControlResponse(BaseModel):
+    success: bool
+    message: str
+    timestamp: datetime
+
+
+class AgentStatusResponse(BaseModel):
+    is_running: bool
+    decision_interval: int
+    symbols: List[str]
+    timeframes: List[str]
+    model_name: str
+    last_run: Optional[str] = None
+    next_run: Optional[str] = None
+    uptime_seconds: Optional[int] = None
+
+
+# Agent control endpoints
+@router.post("/agent/start", response_model=AgentControlResponse)
+async def start_agent():
+    """启动 AI Agent 调度器"""
+    try:
+        scheduler = get_scheduler()
+        
+        if scheduler.is_running:
+            return AgentControlResponse(
+                success=False,
+                message="Agent 已在运行中",
+                timestamp=datetime.now()
+            )
+        
+        # 确保数据库已初始化
+        await init_database()
+        
+        # 启动调度器
+        await scheduler.start()
+        
+        logger.info("AI Agent 调度器启动成功")
+        return AgentControlResponse(
+            success=True,
+            message="Agent 启动成功",
+            timestamp=datetime.now()
+        )
+        
+    except Exception as e:
+        logger.error(f"启动 Agent 失败: {e}")
+        return AgentControlResponse(
+            success=False,
+            message=f"启动 Agent 失败: {str(e)}",
+            timestamp=datetime.now()
+        )
+
+
+@router.post("/agent/stop", response_model=AgentControlResponse)
+async def stop_agent():
+    """停止 AI Agent 调度器"""
+    try:
+        scheduler = get_scheduler()
+        
+        if not scheduler.is_running:
+            return AgentControlResponse(
+                success=False,
+                message="Agent 未在运行",
+                timestamp=datetime.now()
+            )
+        
+        # 停止调度器
+        await scheduler.stop()
+        
+        logger.info("AI Agent 调度器停止成功")
+        return AgentControlResponse(
+            success=True,
+            message="Agent 停止成功",
+            timestamp=datetime.now()
+        )
+        
+    except Exception as e:
+        logger.error(f"停止 Agent 失败: {e}")
+        return AgentControlResponse(
+            success=False,
+            message=f"停止 Agent 失败: {str(e)}",
+            timestamp=datetime.now()
+        )
+
+
+@router.get("/agent/status", response_model=AgentStatusResponse)
+async def get_agent_status():
+    """获取 AI Agent 状态"""
+    try:
+        scheduler = get_scheduler()
+        status = scheduler.get_status()
+        
+        return AgentStatusResponse(
+            is_running=status["is_running"],
+            decision_interval=status["decision_interval"],
+            symbols=status["symbols"],
+            timeframes=status["timeframes"],
+            model_name=status["model_name"],
+            last_run=status.get("last_run"),
+            next_run=status.get("next_run"),
+            uptime_seconds=status.get("uptime_seconds")
+        )
+        
+    except Exception as e:
+        logger.error(f"获取 Agent 状态失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取 Agent 状态失败: {str(e)}")
+
+
+# Trading API Models
+
+
+class PositionResponse(BaseModel):
+    symbol: str
+    side: str
+    size: float
+    entry_price: float
+    mark_price: float
+    unrealized_pnl: float
+    percentage_pnl: float
+    leverage: float
+    margin: float
+    timestamp: datetime
+
+
+class BalanceResponse(BaseModel):
+    total_balance: float
+    available_balance: float
+    margin_balance: float
+    unrealized_pnl: float
+    currency: str
+    timestamp: datetime
+
+
+class AccountSummaryResponse(BaseModel):
+    balance: Dict[str, Any]
+    positions: Dict[str, Any]
+    risk_metrics: Dict[str, Any]
+    timestamp: str
+
+
+# Trading Endpoints
+@router.get("/trading/balance", response_model=BalanceResponse)
+async def get_trading_balance():
+    """获取交易账户余额"""
+    try:
+        trader = get_trader()
+        balance = await trader.get_balance()
+        
+        return BalanceResponse(
+            total_balance=balance.total_balance,
+            available_balance=balance.available_balance,
+            margin_balance=balance.margin_balance,
+            unrealized_pnl=balance.unrealized_pnl,
+            currency=balance.currency,
+            timestamp=balance.timestamp
+        )
+        
+    except Exception as e:
+        logger.error(f"获取交易余额失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取交易余额失败: {str(e)}")
+
+
+@router.get("/trading/positions", response_model=List[PositionResponse])
+async def get_trading_positions():
+    """获取当前持仓"""
+    try:
+        trader = get_trader()
+        positions = await trader.get_positions()
+        
+        return [
+            PositionResponse(
+                symbol=pos.symbol,
+                side=pos.side,
+                size=pos.size,
+                entry_price=pos.entry_price,
+                mark_price=pos.mark_price,
+                unrealized_pnl=pos.unrealized_pnl,
+                percentage_pnl=pos.percentage_pnl,
+                leverage=pos.leverage,
+                margin=pos.margin,
+                timestamp=pos.timestamp
+            )
+            for pos in positions
+        ]
+        
+    except Exception as e:
+        logger.error(f"获取持仓失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取持仓失败: {str(e)}")
+
+
+@router.get("/trading/account/summary", response_model=AccountSummaryResponse)
+async def get_account_summary():
+    """获取账户概览"""
+    try:
+        position_service = get_position_service()
+        summary = await position_service.get_account_summary()
+        
+        return AccountSummaryResponse(**summary)
+        
+    except Exception as e:
+        logger.error(f"获取账户概览失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取账户概览失败: {str(e)}")
+
+
+
+
+
+@router.get("/trading/market/{symbol}/price")
+async def get_market_price(symbol: str):
+    """获取市场价格"""
+    try:
+        trader = get_trader()
+        price = await trader.get_market_price(symbol)
+        
+        return {
+            "symbol": symbol,
+            "price": price,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"获取 {symbol} 价格失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取价格失败: {str(e)}")
+
+

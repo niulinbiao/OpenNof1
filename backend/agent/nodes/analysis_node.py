@@ -1,0 +1,188 @@
+"""
+Analysis Node - ReAct Agent for technical analysis and decision making
+"""
+
+import logging
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
+
+from agent.state import AgentState, SymbolDecision
+from config.settings import config
+
+
+class SymbolDecision(BaseModel):
+    """单个交易标的的决策"""
+
+    symbol: str = Field(description="交易标的符号，例如 'BTCUSDT'")
+    action: str = Field(
+        description="期货交易决策，只能是 'OPEN_LONG'(开多仓), 'OPEN_SHORT'(开空仓), 'CLOSE_LONG'(平多仓), 'CLOSE_SHORT'(平空仓) 或 'HOLD'(持仓观望)"
+    )
+    reasoning: str = Field(description="详细的推理过程，说明为什么做出这个决策")
+    position_size_usd: float = Field(
+        description="期望的仓位价值(美元)，仅对开仓操作有效，平仓操作会自动全部平仓",
+        default=0.0,
+    )
+    stop_loss_price: Optional[float] = Field(
+        description="止损价格，仅对开仓操作有效", default=None
+    )
+    take_profit_price: Optional[float] = Field(
+        description="止盈价格，仅对开仓操作有效", default=None
+    )
+
+
+class TradingDecision(BaseModel):
+    """完整的交易决策结构"""
+
+    symbol_decisions: List[SymbolDecision] = Field(description="所有交易标的的决策列表")
+    overall_summary: str = Field(description="整体市场状况分析和总结")
+
+
+logger = logging.getLogger("AlphaTransformer")
+
+
+# 基础 ReAct agent LLM
+llm = ChatOpenAI(
+    model=config.agent.model_name, api_key=config.agent.api_key, temperature=0.1
+)
+
+# 结构化输出 LLM - 用于最终决策
+structured_llm = ChatOpenAI(
+    model="gpt-4o-mini",  # 使用支持 structured output 的模型
+    api_key=config.agent.api_key,
+    temperature=0.1,
+).with_structured_output(TradingDecision)
+
+
+def analysis_node(tools: List):
+    """Create analysis node function with structured output"""
+    react_agent = create_react_agent(llm, tools)
+
+    async def node(state: AgentState) -> AgentState:
+        """ReAct 分析节点 - AI 主动调用工具获取技术数据并做出决策"""
+        try:
+            logger.info("开始 ReAct 分析...")
+
+            # 获取配置中的交易标的
+            symbols = config.agent.symbols
+            symbols_list = ", ".join(symbols)
+
+            # 获取当前账户状态
+            from trading.binance_futures import get_trader
+
+            trader = get_trader()
+            balance = await trader.get_balance()
+            positions = await trader.get_positions()
+
+            # 格式化账户信息
+            balance_info = f"总余额: ${balance.total_balance:.2f}, 可用余额: ${balance.available_balance:.2f}, 未实现盈亏: ${balance.unrealized_pnl:.2f}"
+
+            positions_info = ""
+            if positions:
+                position_details = []
+                for pos in positions:
+                    position_details.append(
+                        f"{pos.symbol}: {pos.side} {pos.size} (盈亏: ${pos.unrealized_pnl:.2f})"
+                    )
+                positions_info = f"当前持仓: {', '.join(position_details)}"
+            else:
+                positions_info = "当前持仓: 无"
+
+            # 第一步：ReAct agent 分析市场数据
+            analysis_prompt = f"""
+            请分析以下交易标的的当前市场状况：
+            
+            标的: {symbols_list}
+            
+            请使用可用的技术分析工具来获取 K 线数据和技术指标。
+            分析完成后，为每个标的提供详细的市场分析结果。
+            指标包括：RSI、MACD、EMA、NATR（波动率指标）。
+            也需要对各个 timeframe 的指标进行细化分析和汇总。
+            
+            时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            """
+
+            # 运行 ReAct agent 进行技术分析
+            analysis_result = await react_agent.ainvoke(
+                {"messages": [HumanMessage(content=analysis_prompt)]}
+            )
+
+            analysis_content = (
+                analysis_result["messages"][-1].content
+                if analysis_result["messages"]
+                else ""
+            )
+            logger.info(f"{analysis_content}")
+
+            # 第二步：使用 structured output 生成结构化决策
+            decision_prompt = f"""
+            基于以下信息为每个标的做出交易决策：
+            
+            标的: {symbols_list}
+            
+            当前账户状态:
+            {balance_info}
+            {positions_info}
+            
+            技术分析结果:
+            {analysis_content}
+            
+            请为每个标的做出期货交易决策：
+            - OPEN_LONG: 开多仓 (看涨时选择)
+            - OPEN_SHORT: 开空仓 (看跌时选择) 
+            - CLOSE_LONG: 平多仓 (将全部平掉多头持仓)
+            - CLOSE_SHORT: 平空仓 (将全部平掉空头持仓)
+            - HOLD: 持仓观望 (无明确信号或当前持仓合适)
+            
+            对于开仓操作(OPEN_LONG/OPEN_SHORT)，请指定：
+            1. 期望的仓位价值(美元金额) - 单一币种仓位上限为可用余额的 20%
+            2. 止损价格 - 可以用小时级 NATR 计算
+            3. 止盈价格 - 盈亏比 2:1
+            
+            原则:
+            1. 不要随意建仓，除非所有指标都指向一个方向，否则不要轻易下单
+            2. 不要随意主动平仓，因为已经设置了止盈止损了 - 除非有强烈的信号指示趋势已经反转，才需要平仓
+            
+            注意：杠杆已配置为{config.exchange.default_leverage}x，无需指定。
+            """
+
+            # 使用 structured output 获取结构化决策
+            trading_decision = await structured_llm.ainvoke(
+                [HumanMessage(content=decision_prompt)]
+            )
+
+            logger.info(f"trading decision: {trading_decision}")
+
+            # 直接使用 TradingDecision 构建状态
+            symbol_decisions = {}
+            for decision in trading_decision.symbol_decisions:
+                symbol_decisions[decision.symbol] = {
+                    "action": decision.action,
+                    "reasoning": decision.reasoning,
+                    "position_size_usd": decision.position_size_usd,
+                    "stop_loss_price": decision.stop_loss_price,
+                    "take_profit_price": decision.take_profit_price,
+                    "execution_result": None,
+                    "execution_status": "pending",
+                }
+
+            # 更新状态
+            state["symbol_decisions"] = symbol_decisions
+            state["overall_summary"] = trading_decision.overall_summary
+
+            logger.info(
+                f"ReAct 分析完成: {len(trading_decision.symbol_decisions)} 个标的决策"
+            )
+            return state
+
+        except Exception as e:
+            logger.error(f"ReAct 分析失败: {e}")
+            state["symbol_decisions"] = {}
+            state["overall_summary"] = f"分析失败: {str(e)}"
+            state["error"] = str(e)
+            return state
+
+    return node

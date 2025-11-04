@@ -1,0 +1,92 @@
+# Agent Configuration
+
+agent:
+  # LLM Configuration
+  model_name: "gpt-4o"  # gpt-4o (支持structured output), gpt-4, gpt-3.5-turbo, claude-3-sonnet
+  api_key: "${OPENAI_API_KEY}"  # Environment variable
+  
+  # Trading Configuration
+  decision_interval: 180  # seconds between decisions
+  symbols:
+    - BTCUSDT
+    - ETHUSDT
+    - SOLUSDT
+  timeframes:
+    - "5m"
+    - "1h"
+    - "4h"
+  
+  # Prompt Template (can be customized)
+  system_prompt: |
+    You are an AI trading assistant that analyzes market conditions and makes trading decisions.
+    
+    Your goal is to maximize returns while managing risk appropriately.
+    
+    You will receive:
+    - Current market data (prices, technical indicators)
+    - Current positions and account balance
+    - Risk parameters defined by the user
+    
+    Always provide:
+    1. A clear trading decision (BUY/SELL/HOLD)
+    2. Detailed reasoning for your decision
+    3. Confidence level (0.0 to 1.0)
+    4. Risk assessment
+    
+    Available trading tools:
+    - get_account_balance(): Get current account balance
+    - get_positions(): Get current open positions
+    - get_market_data(symbol): Get market data for a symbol
+    - place_buy_order(symbol, quantity): Execute a buy order
+    - place_sell_order(symbol, quantity): Execute a sell order
+    - set_stop_loss(symbol, price): Set stop loss for a position
+    - close_position(symbol): Close a position
+
+# Exchange Configuration
+exchange:
+  name: "binance_futures"
+  api_key: "${BINANCE_API_KEY}"
+  api_secret: "${BINANCE_API_SECRET}"
+  testnet: false  # Use testnet for development
+  
+  # WebSocket and REST API endpoints
+  websocket_url: "wss://fstream.binance.com/stream"  # Production
+  rest_api_url: "https://fapi.binance.com"  # Production
+  
+  # Testnet endpoints (used when testnet: true)
+  testnet_websocket_url: "wss://stream.binancefuture.com/stream"
+  testnet_rest_api_url: "https://testnet.binancefuture.com"
+  
+  # Futures trading settings (for CCXT)
+  default_leverage: 1
+  margin_mode: "cross"  # cross or isolated
+  enable_rate_limit: true
+  timeout: 10000  # milliseconds
+  retries: 3
+  sandbox: false  # CCXT sandbox mode (alternative to testnet)
+  
+# Risk Management (these can be overridden in user prompts)
+default_risk:
+  max_position_size_percent: 0.1  # 10% of account per position
+  max_daily_loss_percent: 0.05    # 5% max daily loss
+                # Maximum leverage
+  stop_loss_percent: 0.02         # 2% stop loss
+  
+# Account Snapshot Configuration
+account_snapshot:
+  enabled: true
+  interval_minutes: 15  # Take snapshot every 15 minutes
+  keep_days: 90  # Keep snapshots for 90 days
+
+# Logging Configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  save_decisions: true
+  save_executions: true
+  save_snapshots: true
+  
+# System Configuration  
+system:
+  host: "0.0.0.0"
+  port: 8000
+  max_concurrent_decisions: 1  # Prevent overlapping decisions
