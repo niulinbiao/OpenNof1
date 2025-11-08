@@ -379,14 +379,14 @@ class TradingHistoryService:
             logger.error(f"保存交易记录失败: {e}")
     
     
-    async def get_balance_history(self, days: int = 30) -> List[Dict[str, Any]]:
+    async def get_balance_history(self, days: Optional[int] = 30) -> List[Dict[str, Any]]:
         """获取余额历史"""
         async with get_session_maker()() as session:
-            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
-            
-            stmt = select(BalanceSnapshot).where(
-                BalanceSnapshot.timestamp >= cutoff_date
-            ).order_by(BalanceSnapshot.timestamp)
+            stmt = select(BalanceSnapshot).order_by(BalanceSnapshot.timestamp)
+
+            if days is not None and days > 0:
+                cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+                stmt = stmt.where(BalanceSnapshot.timestamp >= cutoff_date)
             
             result = await session.execute(stmt)
             snapshots = result.scalars().all()

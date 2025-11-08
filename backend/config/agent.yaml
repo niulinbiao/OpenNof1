@@ -8,11 +8,12 @@ agent:
   # Trading Configuration
   decision_interval: 180  # seconds between decisions
   symbols:
-    - BTCUSDT
     - ETHUSDT
     - SOLUSDT
+    - DOGEUSDT
+    - XRPUSDT
   timeframes:
-    - "5m"
+    - "3m"
     - "1h"
     - "4h"
   

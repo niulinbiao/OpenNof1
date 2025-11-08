@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import AccountChart from '@/components/charts/AccountChart';
@@ -11,46 +11,107 @@ import { formatNumber } from '@/lib/utils';
 import { fetchAccountData, fetchDecisions, fetchPositions, fetchStats } from '@/lib/api';
 import type { AccountValue, Decision, Position, TradeStats } from '@/lib/types';
 
+const DECISIONS_PAGE_SIZE = 20;
+
 export default function TradingDashboard() {
   const [accountData, setAccountData] = useState<AccountValue[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
   const [stats, setStats] = useState<TradeStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isOffline, setIsOffline] = useState(false);
+  const [hasMoreDecisions, setHasMoreDecisions] = useState(true);
+  const [isLoadingMoreDecisions, setIsLoadingMoreDecisions] = useState(false);
+  const loadData = useCallback(async (isInitial = false) => {
+    try {
+      if (isInitial) {
+        setLoading(true);
+      }
+
+      setError(null);
+      setIsOffline(false);
+
+      const [accountDataResult, decisionsResult, positionsResult, statsResult] = await Promise.all([
+        fetchAccountData({ includeAll: true }),
+        fetchDecisions({ limit: DECISIONS_PAGE_SIZE, offset: 0 }),
+        fetchPositions(),
+        fetchStats()
+      ]);
+
+      setAccountData(accountDataResult);
+      setPositions(positionsResult);
+      setStats(statsResult);
+
+      setDecisions((prev) => {
+        if (isInitial || prev.length === 0) {
+          setHasMoreDecisions(decisionsResult.length === DECISIONS_PAGE_SIZE);
+          return decisionsResult;
+        }
+
+        const latestIds = new Set(decisionsResult.map((decision) => decision.id));
+        return decisionsResult.concat(
+          prev.filter((decision) => !latestIds.has(decision.id))
+        );
+      });
+    } catch (error) {
+      console.error('Error loading dashboard data:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load data';
+      setError(errorMessage);
+      setIsOffline(true);
+
+      if (isInitial) {
+        setStats({
+          totalTrades: 0,
+          totalVolume: 0,
+          totalPnl: 0,
+          totalPnlPercent: 0,
+          winRate: 0,
+          avgTradeSize: 0,
+          maxDrawdown: 0,
+          sharpeRatio: 0,
+        });
+      }
+    } finally {
+      if (isInitial) {
+        setLoading(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    const loadData = async (isInitial = false) => {
-      try {
-        if (isInitial) {
-          setLoading(true);
-        }
-        const [accountDataResult, decisionsResult, positionsResult, statsResult] = await Promise.all([
-          fetchAccountData(),
-          fetchDecisions(),
-          fetchPositions(),
-          fetchStats()
-        ]);
-
-        setAccountData(accountDataResult);
-        setDecisions(decisionsResult);
-        setPositions(positionsResult);
-        setStats(statsResult);
-      } catch (error) {
-        console.error('Error loading dashboard data:', error);
-      } finally {
-        if (isInitial) {
-          setLoading(false);
-        }
-      }
-    };
-
-    // Initial load with loading state
     loadData(true);
-
-    // Set up periodic data refresh (without loading state)
-    const interval = setInterval(() => loadData(false), 30000); // Refresh every 30 seconds
+    const interval = setInterval(() => loadData(false), 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadData]);
+
+  const handleLoadMoreDecisions = useCallback(async () => {
+    if (isLoadingMoreDecisions || !hasMoreDecisions) {
+      return;
+    }
+
+    setIsLoadingMoreDecisions(true);
+    try {
+      const nextPage = await fetchDecisions({
+        limit: DECISIONS_PAGE_SIZE,
+        offset: decisions.length,
+      });
+
+      setDecisions((prev) => {
+        const existingIds = new Set(prev.map((decision) => decision.id));
+        const filtered = nextPage.filter((decision) => !existingIds.has(decision.id));
+        return [...prev, ...filtered];
+      });
+
+      if (nextPage.length < DECISIONS_PAGE_SIZE) {
+        setHasMoreDecisions(false);
+      }
+    } catch (error) {
+      console.error('Failed to load more decisions:', error);
+    } finally {
+      setIsLoadingMoreDecisions(false);
+    }
+  }, [decisions.length, hasMoreDecisions, isLoadingMoreDecisions]);
 
   const currentAccountValue = accountData[accountData.length - 1]?.value || 10000;
 
@@ -83,10 +144,16 @@ export default function TradingDashboard() {
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
             <h1 className="text-xl font-bold uppercase tracking-wider">Alpha TRANSFORMER</h1>
-            <div className="text-sm text-muted-foreground">AI Trading Dashboard</div>
+            <div className="text-sm text-muted-foreground">Your AI Trading Dashboard</div>
           </div>
-          <div className="text-sm font-medium">
-            Live Trading • {new Date().toLocaleDateString()}
+          <div className="text-sm font-medium flex items-center space-x-2">
+            <div className={`w-2 h-2 rounded-full ${isOffline ? 'bg-red-500' : 'bg-green-500'}`} />
+            <span>{isOffline ? 'Offline' : 'Live Trading'} • {new Date().toLocaleDateString()}</span>
+            {error && (
+              <span className="text-red-600 text-xs ml-2" title={error}>
+                Connection Error
+              </span>
+            )}
           </div>
         </div>
       </header>
@@ -157,7 +224,12 @@ export default function TradingDashboard() {
             </TabsList>
             
             <TabsContent value="decisions" className="mt-0 flex-1 min-h-0">
-              <DecisionsList decisions={decisions} />
+              <DecisionsList 
+                decisions={decisions} 
+                onLoadMore={handleLoadMoreDecisions}
+                hasMore={hasMoreDecisions}
+                isLoadingMore={isLoadingMoreDecisions}
+              />
             </TabsContent>
             
             <TabsContent value="positions" className="mt-0 flex-1 min-h-0">

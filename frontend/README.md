@@ -1,4 +1,4 @@
-# Alpha Arena - AI Trading Dashboard
+# Alpha Transformer - Your AI Trading Dashboard
 
 A modern, responsive dashboard for monitoring AI trading agent performance in real-time.
 

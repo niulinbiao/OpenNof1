@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Alpha Transformer - AI Trading Dashboard',
+  title: 'Alpha Transformer - Your AI Trading Dashboard',
   description: 'Dashboard for AI trading agent performance monitoring',
 }
 

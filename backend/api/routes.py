@@ -298,10 +298,18 @@ class DecisionResponse(BaseModel):
 
 
 @router.get("/decisions", response_model=List[DecisionResponse])
-async def get_decisions(limit: int = 100, offset: int = 0):
+async def get_decisions(limit: int = 100, offset: int = 0, order: str = "desc"):
     """Get recent trading analyses"""
     try:
-        analyses = await analysis_service.get_recent_analyses(limit=limit, offset=offset)
+        order_normalized = (order or "desc").lower()
+        if order_normalized not in {"asc", "desc"}:
+            raise HTTPException(status_code=400, detail="Invalid order parameter")
+
+        analyses = await analysis_service.get_recent_analyses(
+            limit=limit,
+            offset=offset,
+            order=order_normalized
+        )
         
         response = []
         for analysis in analyses:
@@ -602,13 +610,15 @@ class TradeStatsResponse(BaseModel):
 
 
 @router.get("/trading/balance/history", response_model=List[BalanceHistoryResponse])
-async def get_balance_history(days: int = 30):
+async def get_balance_history(days: int = 30, include_all: bool = False):
     """获取余额历史"""
     try:
         from trading.history_service import get_history_service
         history_service = get_history_service()
         
-        balance_history = await history_service.get_balance_history(days=days)
+        balance_history = await history_service.get_balance_history(
+            days=None if include_all else days
+        )
         
         return [
             BalanceHistoryResponse(
@@ -710,5 +720,3 @@ async def sync_trading_history(full_sync: bool = False):
     except Exception as e:
         logger.error(f"同步交易历史失败: {e}")
         raise HTTPException(status_code=500, detail=f"同步失败: {str(e)}")
-
-

@@ -48,16 +48,24 @@ class AnalysisService:
     @staticmethod
     async def get_recent_analyses(
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        order: str = "desc"
     ) -> list[TradingAnalysis]:
         """Get recent analyses"""
         
         session_maker = get_session_maker()
         async with session_maker() as session:
-            from sqlalchemy import select, desc
-            
-            stmt = select(TradingAnalysis).order_by(desc(TradingAnalysis.timestamp))
+            from sqlalchemy import select, desc, asc
+
+            order_normalized = (order or "desc").lower()
+            order_clause = desc if order_normalized != "asc" else asc
+
+            stmt = select(TradingAnalysis).order_by(
+                order_clause(TradingAnalysis.id),
+                order_clause(TradingAnalysis.timestamp)
+            )
             stmt = stmt.offset(offset).limit(limit)
+            
             
             result = await session.execute(stmt)
             return result.scalars().all()
