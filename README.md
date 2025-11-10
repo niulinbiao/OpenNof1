@@ -80,8 +80,7 @@ Visit `http://localhost:3000` for the dashboard.
 
 ## Team
 
-### YouBet DAO
-[github.com/youbetdao](https://github.com/youbetdao) - An organization dedicated to exploring more open and fair production relationships.
+[YouBet DAO](https://github.com/youbetdao) - An organization dedicated to exploring more open and fair production relationships.
 
 ### Core Contributors
 - [微扰理论](https://x.com/weiraolilun) - Core Developer

@@ -79,9 +79,7 @@ cd frontend && pnpm run dev
 - [环境配置](./ENVIRONMENT_zh.md) - API 密钥和环境变量配置
 
 ## 团队
-
-### YouBet DAO
-[github.com/youbetdao](https://github.com/youbetdao) - 一个致力于探索更开放、更公平生产关系的组织。
+[YouBet DAO](https://github.com/youbetdao) - 一个致力于探索更开放、更公平生产关系的组织。
 
 ### 核心成员
 - [微扰理论](https://x.com/weiraolilun) - 核心开发者
