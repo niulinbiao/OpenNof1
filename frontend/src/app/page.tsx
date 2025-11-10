@@ -10,6 +10,7 @@ import StatsCard from '@/components/stats/StatsCard';
 import { formatNumber } from '@/lib/utils';
 import { fetchAccountData, fetchDecisions, fetchPositions, fetchStats } from '@/lib/api';
 import type { AccountValue, Decision, Position, TradeStats } from '@/lib/types';
+import { Twitter, Github } from 'lucide-react';
 
 const DECISIONS_PAGE_SIZE = 20;
 
@@ -146,14 +147,36 @@ export default function TradingDashboard() {
             <h1 className="text-xl font-bold uppercase tracking-wider">Alpha TRANSFORMER</h1>
             <div className="text-sm text-muted-foreground">Your AI Trading Dashboard</div>
           </div>
-          <div className="text-sm font-medium flex items-center space-x-2">
-            <div className={`w-2 h-2 rounded-full ${isOffline ? 'bg-red-500' : 'bg-green-500'}`} />
-            <span>{isOffline ? 'Offline' : 'Live Trading'} • {new Date().toLocaleDateString()}</span>
-            {error && (
-              <span className="text-red-600 text-xs ml-2" title={error}>
-                Connection Error
-              </span>
-            )}
+          <div className="flex items-center space-x-3">
+            <div className="text-sm font-medium flex items-center space-x-2">
+              <div className={`w-2 h-2 rounded-full ${isOffline ? 'bg-red-500' : 'bg-green-500'}`} />
+              <span>{isOffline ? 'Offline' : 'Live Trading'} • {new Date().toLocaleDateString()}</span>
+              {error && (
+                <span className="text-red-600 text-xs ml-2" title={error}>
+                  Connection Error
+                </span>
+              )}
+            </div>
+            <div className="flex items-center space-x-1">
+              <a 
+                href="https://twitter.com/intent/follow?screen_name=weiraolilun" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex items-center justify-center w-8 h-8 hover:bg-gray-100 rounded-full transition-colors duration-200"
+                title="Tend to follow"
+              >
+                <Twitter size={18} className="text-gray-700 hover:text-black" />
+              </a>
+              <a 
+                href="https://github.com/wfnuser" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex items-center justify-center w-8 h-8 hover:bg-gray-100 rounded-full transition-colors duration-200"
+                title="View GitHub profile"
+              >
+                <Github size={18} className="text-gray-700 hover:text-black" />
+              </a>
+            </div>
           </div>
         </div>
       </header>
