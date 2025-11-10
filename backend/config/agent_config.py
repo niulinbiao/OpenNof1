@@ -42,6 +42,7 @@ def load_config_with_env_vars(config_path: Path) -> Dict[str, Any]:
 
 class AgentConfig(BaseModel):
     model_name: str
+    base_url: Optional[str] = None  # Custom base URL for different providers
     api_key: str
     decision_interval: int
     symbols: list[str]

@@ -2,6 +2,7 @@
 Analysis Node - ReAct Agent for technical analysis and decision making
 """
 
+import json
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -44,17 +45,80 @@ class TradingDecision(BaseModel):
 logger = logging.getLogger("AlphaTransformer")
 
 
-# 基础 ReAct agent LLM
-llm = ChatOpenAI(
-    model=config.agent.model_name, api_key=config.agent.api_key, temperature=0.1
-)
+# 基础 ReAct agent LLM - 支持自定义服务商
+def create_llm():
+    """创建LLM实例，支持不同的AI服务商"""
+    llm_config = {
+        "model": config.agent.model_name,
+        "api_key": config.agent.api_key,
+        "temperature": 0.1
+    }
+    
+    # 如果配置了自定义base_url，则使用
+    if config.agent.base_url:
+        llm_config["base_url"] = config.agent.base_url
+    
+    return ChatOpenAI(**llm_config)
+
+llm = create_llm()
 
 # 结构化输出 LLM - 用于最终决策
-structured_llm = ChatOpenAI(
-    model="gpt-4o-mini",  # 使用支持 structured output 的模型
-    api_key=config.agent.api_key,
-    temperature=0.1,
-).with_structured_output(TradingDecision)
+def create_structured_llm():
+    """创建结构化输出LLM实例，兼容不同AI服务商"""
+    llm_config = {
+        "model": config.agent.model_name,
+        "api_key": config.agent.api_key,
+        "temperature": 0.0
+    }
+    
+    if config.agent.base_url:
+        llm_config["base_url"] = config.agent.base_url
+    
+    llm = ChatOpenAI(**llm_config)
+    
+    # 检查是否支持原生结构化输出 (仅OpenAI gpt-4o系列)
+    if config.agent.model_name.startswith("gpt-4o") and config.agent.base_url is None:
+        return llm.with_structured_output(TradingDecision)
+    else:
+        # 其他模型使用JSON mode或普通文本模式
+        return llm
+
+def supports_native_structured_output():
+    """检查是否支持原生结构化输出"""
+    return config.agent.model_name.startswith("gpt-4o") and config.agent.base_url is None
+
+def parse_json_response(response_text: str) -> TradingDecision:
+    """解析JSON格式的响应为TradingDecision对象"""
+    import json
+    import re
+    
+    # 提取JSON部分（去除markdown代码块标记等）
+    json_match = re.search(r'```json\s*\n(.*?)\n```', response_text, re.DOTALL)
+    if json_match:
+        json_str = json_match.group(1)
+    else:
+        # 尝试直接解析整个响应
+        json_str = response_text.strip()
+    
+    try:
+        json_data = json.loads(json_str)
+        return TradingDecision(**json_data)
+    except Exception as e:
+        logger.error(f"解析JSON响应失败: {e}, 原始响应: {response_text}")
+        # 返回默认的HOLD决策
+        return TradingDecision(
+            symbol_decisions=[
+                SymbolDecision(
+                    symbol=symbol,
+                    action="HOLD",
+                    reasoning="JSON解析失败，采用保守策略",
+                    position_size_usd=0.0
+                ) for symbol in config.agent.symbols
+            ],
+            overall_summary="由于响应解析错误，所有标的采用观望策略"
+        )
+
+structured_llm = create_structured_llm()
 
 
 def analysis_node(tools: List):
@@ -118,7 +182,7 @@ def analysis_node(tools: List):
             logger.info(f"{analysis_content}")
 
             # 第二步：使用 structured output 生成结构化决策
-            decision_prompt = f"""
+            base_decision_prompt = f"""
             基于以下信息为每个标的做出交易决策：
             
             标的: {symbols_list}
@@ -148,11 +212,47 @@ def analysis_node(tools: List):
             
             注意：杠杆已配置为{config.exchange.default_leverage}x，无需指定。
             """
-
-            # 使用 structured output 获取结构化决策
-            trading_decision = await structured_llm.ainvoke(
-                [HumanMessage(content=decision_prompt)]
-            )
+            
+            # 根据是否支持原生结构化输出来调整提示词和处理
+            if supports_native_structured_output():
+                # OpenAI gpt-4o 使用原生结构化输出
+                decision_prompt = base_decision_prompt
+                trading_decision = await structured_llm.ainvoke(
+                    [HumanMessage(content=decision_prompt)]
+                )
+            else:
+                # 其他模型使用JSON格式
+                json_schema = {
+                    "symbol_decisions": [
+                        {
+                            "symbol": "string",
+                            "action": "OPEN_LONG|OPEN_SHORT|CLOSE_LONG|CLOSE_SHORT|HOLD",
+                            "reasoning": "string",
+                            "position_size_usd": "number (仅开仓时需要)",
+                            "stop_loss_price": "number (仅开仓时，可选)",
+                            "take_profit_price": "number (仅开仓时，可选)"
+                        }
+                    ],
+                    "overall_summary": "string"
+                }
+                
+                decision_prompt = f"""{base_decision_prompt}
+                
+                请以JSON格式返回决策，严格按照以下格式：
+                
+                ```json
+                {json.dumps(json_schema, indent=2, ensure_ascii=False)}
+                ```
+                
+                确保JSON格式正确，所有字符串用双引号包围。
+                """
+                
+                response = await structured_llm.ainvoke(
+                    [HumanMessage(content=decision_prompt)]
+                )
+                
+                # 解析JSON响应
+                trading_decision = parse_json_response(response.content)
 
             logger.info(f"trading decision: {trading_decision}")
 
