@@ -1,5 +1,7 @@
 # Quick Start Guide
 
+> 📖 **中文文档**: [快速开始指南](./quickstart_zh.md)
+
 ## Prerequisites
 
 - Python 3.11+
@@ -14,36 +16,90 @@ git clone <repository-url>
 cd AlphaTransformer
 ```
 
-### 2. Install Dependencies
+### 2. Install System Dependencies
+First, install TA-Lib system library:
+
+**macOS:**
 ```bash
+brew install ta-lib
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get update
+sudo apt-get install libta-lib-dev
+```
+
+**Windows:**
+Download and install from: https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib
+
+### 3. Install Project Dependencies
+```bash
+# Backend dependencies
 cd backend
 uv sync
+
+# Frontend dependencies
+cd ../frontend
+pnpm install
 ```
 
-### 3. Setup Environment Variables
+### 4. Setup Environment Variables
 ```bash
-# Create .env file
+# Create .env file from template
+cd backend
 cp .env.example .env
-
-# Edit .env with your credentials
-OPENAI_API_KEY=your_openai_api_key
-BINANCE_API_KEY=your_binance_api_key
-BINANCE_API_SECRET=your_binance_api_secret
 ```
 
-**注意**: 系统会自动读取.env文件中的环境变量并替换配置文件中的${VAR_NAME}占位符。
+Edit the `.env` file with your API credentials:
 
-### 4. Configure Agent
+```bash
+# AI Provider API Key (defaults to DeepSeek)
+OPENAI_API_KEY=your-api-key-here
+
+# Binance Futures API (required for trading)
+BINANCE_API_KEY=your-binance-api-key-here
+BINANCE_API_SECRET=your-binance-api-secret-here
+
+# Database (optional - uses SQLite by default)
+# DATABASE_URL=sqlite:///./alphatransformer.db
+```
+
+**API Key Setup:**
+
+1. **AI Provider API Key** (uses unified `OPENAI_API_KEY` environment variable):
+   - **Default**: DeepSeek API - Get key at: https://platform.deepseek.com/api-keys
+   - **To switch providers**: Modify `backend/config/agent.yaml`:
+     ```yaml
+     agent:
+       model_name: "deepseek-chat"  # Change to: gpt-4o, claude-3-5-sonnet, etc.
+       base_url: "https://api.deepseek.com/v1"  # Update base_url accordingly
+       api_key: "${OPENAI_API_KEY}"
+     ```
+
+2. **Binance API**: 
+   - **Register Binance**: https://accounts.maxweb.red/register?ref=899414088 (Use referral for cashback)
+   - Go to Binance Futures → API Management
+   - Create API key with "Enable Futures" permission
+   - ⚠️ **Important**: Enable "Permit Universal Transfer" if using real trading
+   - For testing: Use Binance Testnet (testnet.binancefuture.com)
+   - ❗ **Currently supports Binance Futures only**, submit Issue for other exchanges
+
+**Note**: The system automatically reads environment variables from .env file and replaces ${VAR_NAME} placeholders in config files.
+
+### 5. Configure Agent
 Edit `backend/config/agent.yaml` to customize:
+- AI provider settings (model_name, base_url, api_key)
 - Trading symbols
 - Risk parameters
 - Decision intervals
-- LLM model settings
 
 Example:
 ```yaml
 agent:
-  model_name: "gpt-4"
+  model_name: "gpt-4o"  # or "deepseek-chat", "claude-3-5-sonnet"
+  base_url: null  # or "https://api.deepseek.com/v1" for DeepSeek
+  api_key: "${OPENAI_API_KEY}"  # or "${DEEPSEEK_API_KEY}"
   decision_interval: 180
   symbols:
     - BTCUSDT
@@ -62,10 +118,10 @@ default_risk:
 # No additional setup required
 ```
 
-### 2. Run Migrations
+### 2. Database Setup
 ```bash
-# Create database tables
-python -m alembic upgrade head
+# SQLite database is created automatically on first run
+# No manual setup required
 ```
 
 ### 3. Start the Trading Agent
@@ -80,17 +136,17 @@ The agent will:
 3. Execute trades through Binance Futures
 4. Log all decisions and executions
 
-### 4. Start API Server
+### 4. Start Frontend Dashboard
 ```bash
 # In another terminal
-cd backend
-uv run python api/main.py
+cd frontend
+pnpm run dev
 ```
 
 ## Monitoring
 
 ### Web Dashboard
-Access the dashboard at: `http://localhost:8000`
+Access the dashboard at: `http://localhost:3000`
 
 Features:
 - Real-time position monitoring
@@ -100,17 +156,17 @@ Features:
 
 ### API Endpoints
 ```bash
-# Get agent status
-curl http://localhost:8000/api/v1/agent/status
+# Get account data
+curl http://localhost:8000/api/account
 
-# Get decision history
-curl http://localhost:8000/api/v1/decisions?limit=10
+# Get P&L history
+curl http://localhost:8000/api/pnl
 
-# Get trade history
-curl http://localhost:8000/api/v1/executions
+# Get position data
+curl http://localhost:8000/api/positions
 
-# Stop agent
-curl -X POST http://localhost:8000/api/v1/agent/stop
+# Get agent analysis
+curl http://localhost:8000/api/analysis
 ```
 
 ## Configuration
@@ -195,11 +251,13 @@ logging:
 - Run database initialization if first time setup
 
 ### Debug Mode
-Enable debug logging for detailed troubleshooting:
+Enable debug logging in `backend/config/agent.yaml`:
 
 ```yaml
 logging:
   level: "DEBUG"
+  save_decisions: true
+  save_executions: true
 ```
 
 ## Next Steps
