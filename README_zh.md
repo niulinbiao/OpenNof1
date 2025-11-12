@@ -82,6 +82,8 @@ _实时交易面板，显示实时盈亏跟踪、AI 决策和持仓监控_
 
 - [快速开始指南](./quickstart_zh.md) - 详细安装配置说明
 - [环境配置](./ENVIRONMENT_zh.md) - API 密钥和环境变量配置
+- [开发路线图](./ROADMAP.md) - 功能开发计划
+- [分析工具](./backend/scripts/analysis/README.md) - 交易性能分析工具
 
 ## 灵感来源与参考
 

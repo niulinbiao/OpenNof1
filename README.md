@@ -82,6 +82,8 @@ _Live trading dashboard showing real-time P&L tracking, AI decisions, and positi
 
 - [Quick Start Guide](./quickstart.md) - Detailed setup instructions
 - [Environment Setup](./ENVIRONMENT.md) - API keys and configuration
+- [Development Roadmap](./ROADMAP.md) - Feature development plans
+- [Analysis Tools](./backend/scripts/analysis/README.md) - Trading performance analysis tools
 
 ## Inspiration & References
 
