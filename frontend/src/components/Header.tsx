@@ -33,10 +33,6 @@ export default function Header({
         </div>
         
         <div className="flex items-center space-x-2 md:space-x-3">
-          <div className="text-xs md:text-sm font-medium flex items-center space-x-1 md:space-x-2">
-            <span className="hidden md:inline">{new Date().toLocaleDateString()}</span>
-          </div>
-          
           <div className="flex items-center space-x-1">
             <a 
               href="https://twitter.com/intent/follow?screen_name=weiraolilun" 
