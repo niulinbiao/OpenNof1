@@ -21,6 +21,13 @@ class BinanceFuturesTrader(ExchangeTrader):
             # 创建CCXT Binance Futures实例
             from config.settings import config
             exchange_config = config.exchange.get_ccxt_config()
+
+            exchange_config.update({
+                "proxies": {
+                    "http": "http://127.0.0.1:7890",
+                    "https": "http://127.0.0.1:7890",
+                }
+            })
             self.exchange = ccxt.binance(exchange_config)
             
             # 设置默认类型为期货
