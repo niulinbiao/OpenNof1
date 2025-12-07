@@ -254,9 +254,11 @@ async def run_agent_analysis():
         # 确保数据库已初始化
         await init_database()
         
-        # 创建技术分析工具
+        # 创建工具列表
+        from agent.tools.history_tools import create_trading_history_tool
         tech_tool = create_tech_analysis_tool()
-        tools = [tech_tool]
+        history_tool = create_trading_history_tool()
+        tools = [tech_tool, history_tool]
         
         # 创建工作流程
         workflow = create_trading_workflow(tools)
