@@ -21,7 +21,6 @@ from services.prompt_service import get_trading_strategy, set_trading_strategy
 
 from functools import wraps
 from fastapi import HTTPException, status
-
 router = APIRouter()
 
 
