@@ -25,13 +25,18 @@ function rewriteToBlocked(request: NextRequest) {
 
 export function middleware(request: NextRequest) {
   const pathname = normalizePath(request.nextUrl.pathname)
-  const isControlAllowed = process.env.ALLOW_CONTROL_OPERATIONS === 'true'
 
+  // Always block these paths
   if (ALWAYS_BLOCKED_PATHS.includes(pathname)) {
     return rewriteToBlocked(request)
   }
 
-  if (!isControlAllowed) {
+  // For control operations, let the backend decide based on agent.yaml configuration
+  // The backend will return 403 if allow_control_operations is false
+  // We only block if explicitly disabled via environment variable (for backward compatibility)
+  const envControlDisabled = process.env.ALLOW_CONTROL_OPERATIONS === 'false'
+
+  if (envControlDisabled) {
     if (CONTROLLED_PATHS.includes(pathname)) {
       return rewriteToBlocked(request)
     }
@@ -44,6 +49,8 @@ export function middleware(request: NextRequest) {
     }
   }
 
+  // Otherwise, let the request pass through to backend
+  // Backend will check config.system.allow_control_operations
   return NextResponse.next()
 }
 
