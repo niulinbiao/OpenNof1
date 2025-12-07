@@ -2,7 +2,7 @@
 
 agent:
   # LLM Configuration - Compatible with any OpenAI API format
-  model_name: "MiniMax-M2"  # Model name (gpt-4o, claude-3-5-sonnet, deepseek-chat, qwen-plus, etc.)
+  model_name: "DeepSeek-V3.2"  # Model name (gpt-4o, claude-3-5-sonnet, deepseek-chat, qwen-plus, etc.)
   base_url: "https://ai.gitee.com/v1"  # API base URL (null for OpenAI, or custom like "https://api.deepseek.com/v1")
   api_key: "${OPENAI_API_KEY}"  # API key environment variable
   

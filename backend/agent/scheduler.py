@@ -19,8 +19,12 @@ class AgentScheduler:
     
     def __init__(self):
         # 创建工具列表
-        from agent.tools import tech_analysis_tool
-        tools = [tech_analysis_tool]
+        from agent.tools.analysis_tools import create_tech_analysis_tool
+        from agent.tools.history_tools import create_trading_history_tool
+        tools = [
+            create_tech_analysis_tool(),
+            create_trading_history_tool()
+        ]
         
         self.workflow_chain = create_trading_workflow(tools)
         self.is_running = False

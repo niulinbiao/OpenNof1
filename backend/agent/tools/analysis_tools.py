@@ -61,6 +61,39 @@ def _generate_overall_signals(multi_timeframe_analysis: Dict[str, Dict]) -> Dict
     if macd_histograms:
         overall_signals["macd_consensus"] = "看涨" if np.mean(macd_histograms) > 0 else "看跌"
     
+    # ADX 趋势强度综合分析
+    adx_values = []
+    for timeframe, data in multi_timeframe_analysis.items():
+        if data.get("adx") is not None:
+            adx_values.append(data["adx"])
+    
+    if adx_values:
+        avg_adx = np.mean(adx_values)
+        overall_signals["avg_adx"] = float(avg_adx)
+        overall_signals["market_regime"] = "强趋势市场" if avg_adx > 25 else "震荡市场" if avg_adx < 20 else "中等趋势市场"
+    
+    # 布林带综合分析
+    bb_positions = []
+    for timeframe, data in multi_timeframe_analysis.items():
+        if data.get("bb_position") is not None:
+            bb_positions.append(data["bb_position"])
+    
+    if bb_positions:
+        avg_bb_position = np.mean(bb_positions)
+        overall_signals["avg_bb_position"] = float(avg_bb_position)
+        overall_signals["bb_signal"] = "超买" if avg_bb_position > 0.8 else "超卖" if avg_bb_position < 0.2 else "正常"
+    
+    # OBV 成交量趋势综合分析
+    obv_trends = []
+    for timeframe, data in multi_timeframe_analysis.items():
+        if data.get("obv_trend") is not None:
+            obv_trends.append(data["obv_trend"])
+    
+    if obv_trends:
+        bullish_count = sum(1 for trend in obv_trends if trend == "看涨")
+        bearish_count = sum(1 for trend in obv_trends if trend == "看跌")
+        overall_signals["obv_consensus"] = "看涨" if bullish_count > bearish_count else "看跌" if bearish_count > bullish_count else "中性"
+    
     return overall_signals
 
 
@@ -158,6 +191,66 @@ def tech_analysis_tool(symbol: str) -> Dict[str, Any]:
             natr = talib.NATR(highs, lows, closes, timeperiod=14)
             timeframe_result["natr"] = natr[-1] if not np.isnan(natr[-1]) else None
             
+            # 布林带 (Bollinger Bands) - 波动率和超买超卖指标
+            if len(closes) >= 20:
+                bb_upper, bb_middle, bb_lower = talib.BBANDS(closes, timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
+                timeframe_result["bb_upper"] = bb_upper[-1] if not np.isnan(bb_upper[-1]) else None
+                timeframe_result["bb_middle"] = bb_middle[-1] if not np.isnan(bb_middle[-1]) else None
+                timeframe_result["bb_lower"] = bb_lower[-1] if not np.isnan(bb_lower[-1]) else None
+                # 计算价格在布林带中的位置 (0-1之间，0.5表示中轨)
+                if bb_upper[-1] and bb_lower[-1] and bb_upper[-1] != bb_lower[-1]:
+                    bb_position = (current_price - bb_lower[-1]) / (bb_upper[-1] - bb_lower[-1])
+                    timeframe_result["bb_position"] = float(bb_position)
+                    timeframe_result["bb_signal"] = "超买" if bb_position > 0.8 else "超卖" if bb_position < 0.2 else "正常"
+            
+            # ADX (Average Directional Index) - 趋势强度指标
+            if len(closes) >= 14:
+                adx = talib.ADX(highs, lows, closes, timeperiod=14)
+                timeframe_result["adx"] = adx[-1] if not np.isnan(adx[-1]) else None
+                # ADX > 25 表示强趋势，< 20 表示震荡
+                if adx[-1] and not np.isnan(adx[-1]):
+                    timeframe_result["trend_strength"] = "强趋势" if adx[-1] > 25 else "弱趋势" if adx[-1] < 20 else "中等趋势"
+            
+            # OBV (On Balance Volume) - 成交量平衡指标
+            if len(closes) > 0:
+                obv = talib.OBV(closes, volumes)
+                timeframe_result["obv"] = obv[-1] if not np.isnan(obv[-1]) else None
+                # 计算OBV趋势（最近5个周期的斜率）
+                if len(obv) >= 5:
+                    obv_slope = (obv[-1] - obv[-5]) / 5 if obv[-5] != 0 else 0
+                    timeframe_result["obv_trend"] = "看涨" if obv_slope > 0 else "看跌" if obv_slope < 0 else "中性"
+            
+            # VWAP (Volume Weighted Average Price) - 成交量加权平均价
+            if len(closes) > 0:
+                # 计算VWAP（简化版，使用最近50根K线）
+                lookback = min(50, len(closes))
+                vwap_data = closes[-lookback:]
+                volume_data = volumes[-lookback:]
+                if np.sum(volume_data) > 0:
+                    vwap = np.sum(vwap_data * volume_data) / np.sum(volume_data)
+                    timeframe_result["vwap"] = float(vwap)
+                    # 价格相对VWAP的位置
+                    vwap_ratio = (current_price - vwap) / vwap * 100 if vwap > 0 else 0
+                    timeframe_result["vwap_ratio"] = float(vwap_ratio)
+                    timeframe_result["vwap_signal"] = "高于VWAP" if vwap_ratio > 0 else "低于VWAP"
+            
+            # 支撑阻力位识别（使用最近的高点和低点）
+            if len(highs) >= 20 and len(lows) >= 20:
+                # 最近20根K线的最高价和最低价作为支撑阻力位
+                recent_highs = highs[-20:]
+                recent_lows = lows[-20:]
+                resistance_level = float(np.max(recent_highs))
+                support_level = float(np.min(recent_lows))
+                timeframe_result["resistance_level"] = resistance_level
+                timeframe_result["support_level"] = support_level
+                # 计算当前价格距离支撑阻力位的距离百分比
+                if resistance_level > support_level:
+                    price_range = resistance_level - support_level
+                    distance_to_resistance = (resistance_level - current_price) / price_range * 100
+                    distance_to_support = (current_price - support_level) / price_range * 100
+                    timeframe_result["distance_to_resistance_pct"] = float(distance_to_resistance)
+                    timeframe_result["distance_to_support_pct"] = float(distance_to_support)
+            
             multi_timeframe_analysis[timeframe] = timeframe_result
         
         # 生成跨时间框架的综合分析
@@ -190,7 +283,7 @@ def create_tech_analysis_tool():
     
     tool = Tool(
         name="tech_analysis_tool",
-        description="获取交易标的的多时间框架技术分析数据，包括EMA20、EMA50、MACD、RSI7、RSI14、NATR（标准化平均真实范围/波动率）等核心技术指标，并提供跨时间框架的综合分析",
+        description="获取交易标的的多时间框架技术分析数据，包括EMA20、EMA50、MACD、RSI7、RSI14、NATR（波动率）、布林带（BB）、ADX（趋势强度）、OBV（成交量平衡）、VWAP（成交量加权平均价）、支撑阻力位等核心技术指标，并提供跨时间框架的综合分析",
         func=tech_analysis_tool
     )
     
