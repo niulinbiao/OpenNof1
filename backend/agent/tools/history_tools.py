@@ -3,13 +3,14 @@
 """
 import logging
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.database import get_session_maker
 from database.models import TradingAnalysis, BalanceSnapshot
 from utils.logger import logger
+from utils.timezone_utils import now_utc, format_beijing_time
 
 
 def get_trading_history_tool(query: str = "") -> Dict[str, Any]:
@@ -45,8 +46,8 @@ def get_trading_history_tool(query: str = "") -> Dict[str, Any]:
         
         async def fetch_history():
             async with get_session_maker()() as session:
-                # 计算查询时间范围
-                start_time = datetime.now() - timedelta(days=days)
+                # 计算查询时间范围（使用UTC）
+                start_time = now_utc() - timedelta(days=days)
                 
                 # 查询交易分析记录
                 query = select(TradingAnalysis).where(
@@ -56,13 +57,16 @@ def get_trading_history_tool(query: str = "") -> Dict[str, Any]:
                 result = await session.execute(query)
                 analyses = result.scalars().all()
                 
-                # 统计信息
+                # 统计信息（时间显示为北京时间）
+                current_time_utc = now_utc()
                 stats = {
                     "total_analyses": len(analyses),
                     "period_days": days,
                     "symbol": symbol or "ALL",
-                    "start_time": start_time.isoformat(),
-                    "end_time": datetime.now().isoformat(),
+                    "start_time": format_beijing_time(start_time),
+                    "end_time": format_beijing_time(current_time_utc),
+                    "start_time_utc": start_time.isoformat(),
+                    "end_time_utc": current_time_utc.isoformat(),
                 }
                 
                 # 按标的统计决策
@@ -90,10 +94,17 @@ def get_trading_history_tool(query: str = "") -> Dict[str, Any]:
                         symbol_stats[sym]["actions"][action] = symbol_stats[sym]["actions"].get(action, 0) + 1
                         action_counts[action] = action_counts.get(action, 0) + 1
                         
-                        # 保存最近10个决策
+                        # 保存最近10个决策（时间显示为北京时间）
                         if len(symbol_stats[sym]["recent_decisions"]) < 10:
+                            # 确保timestamp有时区信息
+                            timestamp = analysis.timestamp
+                            if timestamp.tzinfo is None:
+                                # 如果没有时区信息，假设是UTC（数据库存储的可能是本地时间）
+                                timestamp = timestamp.replace(tzinfo=timezone.utc)
+                            
                             symbol_stats[sym]["recent_decisions"].append({
-                                "timestamp": analysis.timestamp.isoformat(),
+                                "timestamp": format_beijing_time(timestamp),
+                                "timestamp_utc": timestamp.isoformat(),
                                 "action": action,
                                 "reasoning": decision.get("reasoning", "")[:200],  # 限制长度
                                 "execution_status": decision.get("execution_status", "unknown")

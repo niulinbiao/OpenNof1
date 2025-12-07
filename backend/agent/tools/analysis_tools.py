@@ -6,10 +6,11 @@ import logging
 import numpy as np
 import talib
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from market.data_cache import kline_cache
 from utils.logger import logger
+from utils.timezone_utils import now_utc
 
 
 def _generate_overall_signals(multi_timeframe_analysis: Dict[str, Dict]) -> Dict[str, Any]:
@@ -253,12 +254,12 @@ def tech_analysis_tool(symbol: str) -> Dict[str, Any]:
             
             multi_timeframe_analysis[timeframe] = timeframe_result
         
-        # 生成跨时间框架的综合分析
+        # 生成跨时间框架的综合分析（使用UTC时间）
         result = {
             "symbol": symbol,
             "timeframes": multi_timeframe_analysis,
             "overall_signals": _generate_overall_signals(multi_timeframe_analysis),
-            "analysis_timestamp": datetime.now().isoformat()
+            "analysis_timestamp": now_utc().isoformat()
         }
         
         
@@ -272,7 +273,7 @@ def tech_analysis_tool(symbol: str) -> Dict[str, Any]:
             "error": f"技术分析失败: {str(e)}",
             "timeframes": {},
             "overall_signals": {},
-            "analysis_timestamp": datetime.now().isoformat()
+            "analysis_timestamp": now_utc().isoformat()
         }
 
 
